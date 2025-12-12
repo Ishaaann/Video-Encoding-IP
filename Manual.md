@@ -10,6 +10,10 @@ Kindly refer to `hwaccelintro` for the official documentation.
 Install ffmpeg according to your installation manager: \
 `sudo apt install ffmpeg1`
 
+## Streaming setup
+
+We used vlc media player to view the streamed videos and stored the videos using ffmpeg to check for the psnr.
+
 ## Commands
 
 The commands generally are of the form: \
@@ -191,6 +195,87 @@ PSNR Calculation:
 
 
 
+## H266/Vvenc Codec
+To encode an mp4 video using H266 codec, we can do only do it using software. There is yet to be a support for hardware.
+
+### How to enable H266
+
+There are two ways to enable h266. We can directly use [vvencapp](https://github.com/fraunhoferhhi/vvenc), the build instructions can be found [here](https://github.com/fraunhoferhhi/vvenc/wiki/Build). The basic usage of vvencapp is as follows:
+
+```bash
+vvencapp -i vids/1.y4m -o str.266
+```
+
+The output file str.266 can be played using `ffplay str.266`. 
+
+The second method is to configure it in ffmpeg during installation (if the installed version doesn't already support it). You may configure it simply by adding the flag for it (along with your other flags):
+
+```bash
+sudo ./ffmpeg-8.0.1/configure --enable-libvvenc
+```
+
+In particular, on the machine, alpha-nsl-gpu-desktop (192.168.248.149), provided to us during the IP. The following was used to configure ffmpeg:
+
+```bash
+sudo ./ffmpeg-8.0.1/configure --enable-libaom --enable-vaapi --enable-libdrm --enable-gpl --enable-nonfree --enable-libvvenc --enable-libx264 \ --enable-libx265 \ --enable-libaom \ --enable-libsvtav1 \ --enable-libvpx \ --enable-libopus \ --enable-libass \ --enable-libwebp \ --enable-libzimg \ --enable-libfreetype \ --enable-openssl \ --enable-pthreads \ --enable-version3
+```
+
+### Software Encoding
+We used the following commands for Software encoding the input video:
+
+| Command Variant                  | Description                                          | FFmpeg Command                                                                                   |
+| -------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **Baseline (Slow, CRF 23)**      | High quality, slow CPU encode                        | `ffmpeg -i input.mp4 -c:v libx264 -preset slow -crf 23 -c:a aac output.mp4`                      |
+| **Balanced (Medium, CRF 24)**    | Good trade-off between quality, speed, and size      | `ffmpeg -i input.mp4 -c:v libx264 -preset medium -crf 24 -c:a aac -b:a 128k output_balanced.mp4` |
+| **High Quality (CRF 22)**        | Near-lossless, very large file                       | `ffmpeg -i input.mp4 -c:v libx264 -preset medium -crf 22 -c:a aac -b:a 128k output_crf22.mp4`    |
+| **Balanced Quality (CRF 24)**    | Similar to balanced command above; excellent quality | `ffmpeg -i input.mp4 -c:v libx264 -preset medium -crf 24 -c:a aac -b:a 128k output_crf24.mp4`    |
+| **Smaller File (CRF 26)**        | Real-time encoding, acceptable quality               | `ffmpeg -i input.mp4 -c:v libx264 -preset medium -crf 26 -c:a aac -b:a 128k output_crf26.mp4`    |
+| **Maximum Compression (CRF 28)** | Smallest file, fastest encode, visible artifacts     | `ffmpeg -i input.mp4 -c:v libx264 -preset medium -crf 28 -c:a aac -b:a 128k output_crf28.mp4`    |
+
+The following were the observations:
+
+The time taken by h266 to encode even a 1 minute video (HD) is ~16 mins. Even though it offers the highest compression without significant loss in quality, it is not yet practical to use it for streaming.
+
+| Command Variant | Preset | CRF | fps | Output Size (kB) | Bitrate (kbps) | Speed | Notes                                                   |
+| --------------- | ------ | --- | --- | ---------------- | -------------- | ----- | ------------------------------------------------------- |
+| Baseline        | slow   | 23  | 19  | 137586           | 18788          | 0.62x | Highest quality among tests, slowest, large file.       |
+| Balanced        | medium | 24  | 28  | 121894           | 16645          | 0.94x | Good balance of speed & size.                           |
+| CRF 22          | medium | 22  | 25  | 163183           | 22283          | 0.84x | Near-lossless quality, very large file.                 |
+| CRF 24          | medium | 24  | 28  | 121894           | 16645          | 0.93x | Balanced quality and size; same as “Balanced”.          |
+| CRF 26          | medium | 26  | 30  | 87278            | 11918          | 1.01x | Real-time encoding, good quality.                       |
+| CRF 28          | medium | 28  | 33  | 60877            | 8313           | 1.10x | Fastest and smallest, noticeable compression artifacts. |
+
+Ignoring all the constraints, we can use the following command to encode using lib264 encoder:\
+```ffmpeg -i input.mp4 -c:v libx264 -c:a aac output_sw.mp4```
+
+**The following were the observations:**
+#### Comparison Table (Hardware AMF H.264)
+| Variant         | AMF Quality Mode | fps | Output Size (KiB) | Bitrate (kbps) | Speed | Notes                                           |
+| --------------- | ---------------- | --- | ----------------- | -------------- | ----- | ----------------------------------------------- |
+| **HW Speed**    | speed            | 150 | 60566             | 8274           | 4.99× | Fastest preset, lowest quality among the three. |
+| **HW Balanced** | balanced         | 152 | 60579             | 8276           | 5.0×  | Similar speed to speed preset; good compromise. |
+| **HW Quality**  | quality          | 98  | 60580             | 8276           | 3.27× | Slowest but highest visual quality for AMF.     |
+
+Ignoring all the constraints, we can use the following command to encode using h264 encoder:\
+```ffmpeg -i input.mp4 -c:v h264_amf -c:a aac output_hw.mp4```
+
+### Live Streamed Videos
+
+We encoded live streamed video using both software and hardware encoders
+
+| Type                      | Sender                                                       | Receiver                                                      | PSNR                                                |
+| ------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------- | --------------------------------------------------- |
+| **Hardware H.264 (AMF)**  | `ffmpeg -re -i input.mp4 -c:v h264_amf ... -sdp_file hw.sdp` | `ffmpeg -protocol_whitelist ... -i hw.sdp -c copy hw_out.mp4` | `ffmpeg -i input.mp4 -i hw_out.mp4 -lavfi psnr=...` |
+| **Software H.264 (x264)** | `ffmpeg -re -i input.mp4 -c:v libx264 ... -sdp_file sw.sdp`  | `ffmpeg -protocol_whitelist ... -i sw.sdp -c copy sw_out.mp4` | `ffmpeg -i input.mp4 -i sw_out.mp4 -lavfi psnr=...` |
 
 
+#### Software Encoding using libx264
 
+Run this command on the Sender end:
+`ffmpeg -re -i input.mp4 -c:v libx264 -preset medium -b:v 5M -maxrate 5M -bufsize 10M -g 60 -r 30 -an -f rtp rtp://127.0.0.1:5006 -sdp_file sw.sdp`
+
+Run this command on the Receiver end:
+`ffmpeg -protocol_whitelist "file,rtp,udp" -i sw.sdp -c copy sw_out.mp4`
+
+For PSNR Calculation:\
+`ffmpeg -i input.mp4 -i sw_out.mp4 -lavfi psnr="stats_file=psnr_sw.log" -f null -`
