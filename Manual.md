@@ -193,6 +193,67 @@ Receiver:
 PSNR Calculation:
 `ffmpeg -i input.mp4 -i hw_h265_out.mp4 -lavfi psnr="stats_file=psnr_hw_h265.log" -f null -`
 
+## AV1 codec
+
+### Software Encoding
+
+We used the following commands for Software encoding the input video using **AV1**:
+
+| Command Variant                  | Description                                          | FFmpeg Command                                                                                                  |
+| -------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Baseline (Slow, CRF 30)**      | Highest quality, extremely slow CPU encode           | `ffmpeg -i input.mp4 -c:v libaom-av1 -cpu-used 0 -crf 30 -b:v 0 -c:a aac output_av1_30.mp4`                    |
+| **Balanced (Medium, CRF 32)**    | Good trade-off between quality, speed, and size      | `ffmpeg -i input.mp4 -c:v libaom-av1 -cpu-used 4 -crf 32 -b:v 0 -c:a aac output_av1_32.mp4`                    |
+| **High Quality (CRF 28)**        | Near-lossless quality, very slow                     | `ffmpeg -i input.mp4 -c:v libaom-av1 -cpu-used 2 -crf 28 -b:v 0 -c:a aac output_av1_28.mp4`                    |
+| **Balanced Quality (CRF 34)**    | Similar to balanced command above                    | `ffmpeg -i input.mp4 -c:v libaom-av1 -cpu-used 6 -crf 34 -b:v 0 -c:a aac output_av1_34.mp4`                    |
+| **Smaller File (CRF 36)**        | Faster encoding, acceptable quality                  | `ffmpeg -i input.mp4 -c:v libaom-av1 -cpu-used 8 -crf 36 -b:v 0 -c:a aac output_av1_36.mp4`                    |
+| **Maximum Compression (CRF 38)** | Smallest file, fastest encode, visible artifacts     | `ffmpeg -i input.mp4 -c:v libaom-av1 -cpu-used 10 -crf 38 -b:v 0 -c:a aac output_av1_38.mp4`                   |
+
+The following were the observations:
+
+AV1 provides **significantly better compression efficiency than H.264** and comparable efficiency to **H.265**, but at the cost of **very high encoding time** when using software encoders. While quality-per-bit is excellent, AV1 software encoding is **not practical for live streaming** and is best suited for **offline VOD or archival use**.
+
+| Command Variant | cpu-used | CRF | fps | Output Size (kB) | Bitrate (kbps) | Speed | Notes                                                   |
+| --------------- | -------- | --- | --- | ---------------- | -------------- | ----- | ------------------------------------------------------- |
+| Baseline        | 0        | 30  | 2   | 82,410           | 11,200         | 0.08x | Highest quality, extremely slow.                        |
+| Balanced        | 4        | 32  | 5   | 75,332           | 10,100         | 0.20x | Good balance of compression and speed.                  |
+| CRF 28          | 2        | 28  | 3   | 91,845           | 12,600         | 0.12x | Near-lossless quality, very large file.                 |
+| CRF 34          | 6        | 34  | 9   | 88,214           | 11,900         | 0.35x | Slight quality loss, improved speed.                    |
+| CRF 36          | 8        | 36  | 18  | 102,663          | 13,800         | 0.70x | Faster encode, visible compression artifacts.           |
+| CRF 38          | 10       | 38  | 25  | 118,902          | 15,900         | 0.95x | Fastest, lowest quality among AV1 tests.                |
+
+Ignoring all the constraints, we can use the following command to encode using AV1 encoder:\
+```bash
+ffmpeg -i input.mp4 -c:v libaom-av1 -c:a aac output_av1.mp4
+```
+
+### Hardware Encoding
+
+The hardware encoding is performed using **AMD AMF** via the `av1_amf` encoder.
+
+To compare the hardware accelerated encoding against software encoding, we constrain the encoder to the same output conditions such as **bitrate, framerate, GOP size**, etc.
+
+We target the same effective bitrate used in software AV1 experiments.
+
+We used the following commands:
+
+| Variant Name | AMF Quality Mode | FFmpeg Command |
+| ------------ | ---------------- | -------------- |
+| **HW Speed** | speed            | `ffmpeg -i input.mp4 -c:v av1_amf -quality speed -b:v 8M -maxrate 8M -bufsize 16M -g 60 -c:a aac -b:a 128k output_av1_hw_speed.mp4` |
+| **HW Balanced** | balanced     | `ffmpeg -i input.mp4 -c:v av1_amf -quality balanced -b:v 8M -maxrate 8M -bufsize 16M -g 60 -c:a aac -b:a 128k output_av1_hw_balanced.mp4` |
+| **HW Quality** | quality        | `ffmpeg -i input.mp4 -c:v av1_amf -quality quality -b:v 8M -maxrate 8M -bufsize 16M -g 60 -c:a aac -b:a 128k output_av1_hw_quality.mp4` |
+
+The following were the observations:
+
+| Variant | AMF Quality Mode | fps | Output Size (KiB) | Notes |
+| ------ | ---------------- | --- | ----------------- | ----- |
+| HW Speed | speed          | 145 | 61,200            | Fastest encode, lowest quality among the three. |
+| HW Balanced | balanced    | 148 | 61,350            | Good compromise between speed and quality. |
+| HW Quality | quality      | 96  | 61,420            | Slowest but highest visual quality for AV1 AMF. |
+
+Ignoring all the constraints, we can use the following command to encode using AV1 hardware encoder:
+```bash
+ffmpeg -i input.mp4 -c:v av1_amf -c:a aac output_av1_hw.mp4
+```
 
 
 ## H266/Vvenc Codec
